@@ -41,7 +41,12 @@ func (c *Client) readLoop() {
 	scanner := bufio.NewScanner(c.conn)
 	for scanner.Scan() {
 		msg := scanner.Text()
-		c.incoming <- msg
+		parsed, err := ParsedMessage(msg)
+		if err != nil {
+			log.Printf("Invalid message from %s: %v", c.id, err)
+			continue
+		}
+		c.handleMessage(parsed)
 	}
 	if err := scanner.Err(); err != nil {
 		log.Printf("Client %s read error: %v", c.id, err)
@@ -54,9 +59,45 @@ func (c *Client) writeLoop() {
 	// Placeholder — in future we can use outgoing message queue
 }
 
+// Send sends a message to the client's outbound channel.
 func (c *Client) Send(msg string) {
-	_, err := fmt.Fprintln(c.conn, msg)
+	select {
+	case c.outbound <- msg:
+	default:
+		log.Printf("Dropping message to %s (channel full)", c.id)
+	}
+}
+
+// SendJSON encodes and sends a Message as JSON.
+func (c *Client) SendJSON(msg *Message) {
+	encoded, err := EncodeMessage(msg)
 	if err != nil {
-		log.Printf("Send error to %s: %v", c.id, err)
+		log.Printf("Encoding error: %v", err)
+		return
+	}
+	c.Send(encoded)
+}
+
+func (c *Client) handleMessage(msg *Message) {
+	switch msg.Action {
+	case "SUB":
+		c.topics[msg.Topic] = true
+		c.SendJSON(&Message{
+			Action:  "ACK",
+			Topic:   msg.Topic,
+			Payload: "Subscribed successfully",
+		})
+	case "PUB":
+		// Just echo back to sender for now
+		c.SendJSON(&Message{
+			Action:  "ACK",
+			Topic:   msg.Topic,
+			Payload: "Received: " + msg.Payload,
+		})
+	default:
+		c.SendJSON(&Message{
+			Action:  "ERR",
+			Payload: "Unknown action: " + msg.Action,
+		})
 	}
 }
