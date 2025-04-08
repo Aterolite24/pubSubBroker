@@ -2,10 +2,8 @@ package conn
 
 import (
 	"bufio"
-	"fmt"
 	"log"
 	"net"
-	// "strings"
 )
 
 // Client represents a connected client session.
@@ -14,6 +12,7 @@ type Client struct {
 	id       string
 	topics   map[string]bool
 	incoming chan string
+	outbound chan string
 }
 
 // HandleNewClient initializes a client and begins reading messages.
@@ -23,6 +22,7 @@ func HandleNewClient(conn net.Conn) {
 		id:       conn.RemoteAddr().String(),
 		topics:   make(map[string]bool),
 		incoming: make(chan string),
+		outbound: make(chan string, 10), // buffer for outbound messages
 	}
 
 	log.Printf("New client connected: %s\n", client.id)
@@ -30,7 +30,7 @@ func HandleNewClient(conn net.Conn) {
 	go client.readLoop()
 	go client.writeLoop()
 
-	// For now, simulate echo
+	// Echo back all incoming messages for now
 	for msg := range client.incoming {
 		log.Printf("Received from %s: %s", client.id, msg)
 		client.Send("ACK: " + msg)
@@ -41,7 +41,7 @@ func (c *Client) readLoop() {
 	scanner := bufio.NewScanner(c.conn)
 	for scanner.Scan() {
 		msg := scanner.Text()
-		parsed, err := ParsedMessage(msg)
+		parsed, err := ParseMessage(msg) // ← fixed function name
 		if err != nil {
 			log.Printf("Invalid message from %s: %v", c.id, err)
 			continue
@@ -56,7 +56,15 @@ func (c *Client) readLoop() {
 }
 
 func (c *Client) writeLoop() {
-	// Placeholder — in future we can use outgoing message queue
+	for msg := range c.outbound {
+		_, err := c.conn.Write([]byte(msg + "\n"))
+		if err != nil {
+			log.Printf("Write error to %s: %v", c.id, err)
+			break
+		}
+	}
+	log.Printf("Stopping writer for client %s", c.id)
+	c.conn.Close()
 }
 
 // Send sends a message to the client's outbound channel.

@@ -12,12 +12,15 @@ type Message struct {
 	Payload string `json:"payload"` // e.g. message content
 }
 
-// ParseMessage parses a raw string into a Message struct.
+// ParseMessage tries to parse raw string into Message struct
 func ParseMessage(raw string) (*Message, error) {
 	var msg Message
 	err := json.Unmarshal([]byte(raw), &msg)
 	if err != nil {
-		return nil, fmt.Errorf("invalid message format: %v", err)
+		return nil, fmt.Errorf("invalid message format: %w", err)
+	}
+	if msg.Action == "" {
+		return nil, fmt.Errorf("missing action field")
 	}
 	return &msg, nil
 }
