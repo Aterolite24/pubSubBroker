@@ -5,14 +5,15 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/gorilla/mux"
 	"pubSubBroker/internal/httpserver"
+
+	"github.com/gorilla/mux"
 )
 
 func main() {
 	r := mux.NewRouter()
 	httpserver.RegisterRoutes(r)
 
-	fmt.Println("pubSubBroker Broker is running on port 9000")
+	fmt.Println("Broker is running on port 9000")
 	log.Fatal(http.ListenAndServe(":9000", r))
 }

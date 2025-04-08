@@ -6,15 +6,10 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
-	"pubSubBroker/internal/pubsub"
+	"pubSubBroker/internal/models"
 )
 
-type PublishRequest struct {
-	Topic   string `json:"topic"`
-	Message string `json:"message"`
-}
-
-var broker = pubsub.NewBroker()
+var broker = models.NewBroker()
 
 func RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/publish", handlePublish).Methods("POST")
@@ -22,7 +17,7 @@ func RegisterRoutes(r *mux.Router) {
 }
 
 func handlePublish(w http.ResponseWriter, r *http.Request) {
-	var msg PublishRequest
+	var msg models.PublishData
 	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
 		http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
@@ -45,7 +40,17 @@ func handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case msg := <-sub:
-			fmt.Fprintf(w, "data: %s\n\n", msg)
+			subData := models.SubscribeData{
+				Topic:   topic,
+				Message: msg,
+			}
+
+			data, err := json.Marshal(subData)
+			if err != nil {
+				continue
+			}
+
+			fmt.Fprintf(w, "data: %s\n\n", data)
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
