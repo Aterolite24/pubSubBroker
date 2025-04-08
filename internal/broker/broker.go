@@ -2,7 +2,7 @@ package broker
 
 import (
 	"log"
-	"gobroker/internal/connection"
+	"pubSubBroker/internal/connection"
 )
 
 type Broker struct {
