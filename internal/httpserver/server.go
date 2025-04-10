@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"pubSubBroker/internal/models"
+	"pubSubBroker/internal/utils"
 
 	"github.com/gorilla/mux"
 )
@@ -14,11 +15,13 @@ import (
 var broker *models.Broker
 
 func RegisterRoutes(r *mux.Router) {
-	cfg := models.NewConfig(true, false, 5*time.Second)
+	cfg := models.NewConfig(true, false, 10*time.Second, 5*time.Second, 15*time.Second)
+
 	broker = models.NewBroker(cfg)
+	utils.StartRowDeletionJob(cfg.DeletionInterval, cfg.PersistenceTimeout)
 
 	r.HandleFunc("/publish", handlePublish).Methods("POST")
-	r.HandleFunc("/subscribe/{topic}", handleSubscribe)
+	r.HandleFunc("/subscribe", handleSubscribe).Methods("POST")
 	r.HandleFunc("/ack", handleAck).Methods("POST")
 }
 
@@ -38,30 +41,32 @@ func handlePublish(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleSubscribe(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	topic := vars["topic"]
+
+	var body models.ClientData
+	err := json.NewDecoder(r.Body).Decode(&body)
+	if err != nil {
+		http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	topic := body.Topic
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	sub := broker.Subscribe(topic)
+	sub := broker.Subscribe(topic, body.TimeStamp)
 	defer broker.Unsubscribe(topic, sub)
 
 	for {
 		select {
 		case msg := <-sub:
-			subData := models.SubscribeData{
-				Topic:   topic,
-				Message: msg,
-			}
-
-			data, err := json.Marshal(subData)
+			data, err := json.Marshal(msg)
 			if err != nil {
 				continue
 			}
 
-			fmt.Fprintf(w, "%s", data)
+			fmt.Fprintf(w, "%s\n", data)
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}

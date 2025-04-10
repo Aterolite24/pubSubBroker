@@ -5,7 +5,12 @@ import (
 	"sync"
 	"time"
 
+	"context"
+	"fmt"
+
 	"pubSubBroker/internal/utils"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 type Broker struct {
@@ -23,23 +28,40 @@ func NewBroker(config Config) *Broker {
 	}
 }
 
+func (b *Broker) insertDatabase(topic string, msg json.RawMessage) {
+	connection, err1 := utils.GetMongoClient()
+	if err1 != nil {
+		fmt.Println("Error : ", err1)
+		return
+	}
+
+	message := DbMessageData{
+		Topic:     topic,
+		Message:   msg,
+		TimeStamp: time.Now(),
+	}
+
+	_, err := connection.InsertOne(context.TODO(), message)
+
+	if err != nil {
+		fmt.Println("Error : ", err)
+		return
+	}
+}
+
 func (b *Broker) Publish(topic string, msg json.RawMessage) error {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	subs, ok := b.subs[topic]
+	subs := b.subs[topic]
 
-	if !ok || len(subs) == 0 {
-		return &BrokerError{
-			Code:    404,
-			Message: "No subscription channels present for topic: " + topic,
-		}
-	}
+	go b.insertDatabase(topic, msg)
 
 	if b.config.AtLeastOnce {
 		for _, ch := range subs {
 			msgID := utils.GenerateMessageID()
 			envelope := Envelope{
 				ID:      msgID,
+				Topic:   topic,
 				Payload: msg,
 			}
 			envelopedData, err := json.Marshal(envelope)
@@ -52,7 +74,7 @@ func (b *Broker) Publish(topic string, msg json.RawMessage) error {
 
 			select {
 			case ch <- envelopedData:
-				b.startAckTimer(topic, msgID, envelope, ch)
+				go b.startAckTimer(topic, msgID, envelope, ch)
 			default:
 				return &BrokerError{
 					Code:    503,
@@ -72,6 +94,7 @@ func (b *Broker) Publish(topic string, msg json.RawMessage) error {
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -84,19 +107,33 @@ func (b *Broker) startAckTimer(topic, msgID string, envelope Envelope, ch chan j
 			envelopedData, err := json.Marshal(envelope)
 			if err != nil {
 				// In production, you may log this error.
+				fmt.Println("Error")
 				return
 			}
+
+			ok := true
 			select {
-			case pending.subscriber <- envelopedData:
-				pending.tries++
-				pending.timer.Reset(b.config.AckTimeout)
-				b.pendingAcks[msgID] = pending
+			case _, ok = <-pending.subscriber:
 			default:
-				// Optionally log that the channel is still full.
+			}
+
+			if ok {
+				select {
+
+				case pending.subscriber <- envelopedData:
+					pending.tries++
+					pending.timer.Reset(b.config.AckTimeout)
+					b.pendingAcks[msgID] = pending
+				default:
+					// Channel is full or possibly closed — clean up
+
+				}
+			} else {
+				pending.timer.Stop()
+				delete(b.pendingAcks, msgID)
 			}
 		}
 	})
-
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -107,13 +144,12 @@ func (b *Broker) startAckTimer(topic, msgID string, envelope Envelope, ch chan j
 		tries:      1,
 		timer:      timer,
 	}
-	
 }
 
 func (b *Broker) Acknowledge(topic, messageID string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	
+
 	pending, exists := b.pendingAcks[messageID]
 	if !exists {
 		return &BrokerError{
@@ -127,13 +163,75 @@ func (b *Broker) Acknowledge(topic, messageID string) error {
 	return nil
 }
 
-
-func (b *Broker) Subscribe(topic string) chan json.RawMessage {
+func (b *Broker) Subscribe(topic string, timeStamp time.Time) chan json.RawMessage {
 	ch := make(chan json.RawMessage, 10)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	b.subs[topic] = append(b.subs[topic], ch)
+
+	connection, err := utils.GetMongoClient()
+
+	if err != nil {
+		fmt.Println("Cant connect to db..")
+	}
+
+	res, err1 := connection.Find(context.TODO(),
+		bson.D{
+			{Key: "timestamp", Value: bson.D{{Key: "$gt", Value: timeStamp}}},
+			{Key: "topic", Value: topic},
+		})
+
+	if err1 != nil {
+		fmt.Println("Cant connect to db..")
+	}
+	defer res.Close(context.TODO())
+
+	if b.config.AtLeastOnce {
+		for res.Next(context.TODO()) {
+			var result PublishData
+			if err := res.Decode(&result); err != nil {
+				fmt.Println("error")
+			}
+
+			msgID := utils.GenerateMessageID()
+			envelope := Envelope{
+				ID:      msgID,
+				Topic:   topic,
+				Payload: result.Message,
+			}
+			envelopedData, err := json.Marshal(envelope)
+			if err != nil {
+				return ch
+			}
+			select {
+			case ch <- envelopedData:
+				go b.startAckTimer(topic, msgID, envelope, ch)
+			default:
+				return nil
+			}
+		}
+	} else {
+		for res.Next(context.TODO()) {
+
+			var result PublishData
+			if err := res.Decode(&result); err != nil {
+				fmt.Println("error")
+			}
+
+			finalResult, err := json.Marshal(result.Message)
+			if err != nil {
+				return ch
+			}
+
+			select {
+			case ch <- finalResult:
+			default:
+				return nil
+			}
+		}
+	}
+
 	return ch
 }
 
