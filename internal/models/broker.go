@@ -106,7 +106,6 @@ func (b *Broker) startAckTimer(topic, msgID string, envelope Envelope, ch chan j
 		if pending, exists := b.pendingAcks[msgID]; exists {
 			envelopedData, err := json.Marshal(envelope)
 			if err != nil {
-				// In production, you may log this error.
 				fmt.Println("Error")
 				return
 			}
@@ -125,8 +124,6 @@ func (b *Broker) startAckTimer(topic, msgID string, envelope Envelope, ch chan j
 					pending.timer.Reset(b.config.AckTimeout)
 					b.pendingAcks[msgID] = pending
 				default:
-					// Channel is full or possibly closed — clean up
-
 				}
 			} else {
 				pending.timer.Stop()
